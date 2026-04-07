@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="HealthTracker.Api/HealthTracker.Api.csproj" />
+  <Project Path="HealthTracker.AppHost/HealthTracker.AppHost.csproj" />
+  <Project Path="HealthTracker.ServiceDefaults/HealthTracker.ServiceDefaults.csproj" />
+</Solution>
