@@ -2,7 +2,7 @@ import { useState } from 'react';
 import axios from 'axios';
 import '../styles/Login.css';
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://localhost:7020';
 
 function Login({ onLogin }) {
   const [isLogin, setIsLogin] = useState(true);
@@ -36,7 +36,8 @@ function Login({ onLogin }) {
         setError('Login failed');
       }
     } catch (err) {
-      setError(err.response?.data || 'An error occurred');
+      const errorMsg = err.response?.data || err.message || 'An error occurred';
+      setError(typeof errorMsg === 'string' ? errorMsg : JSON.stringify(errorMsg));
     } finally {
       setLoading(false);
     }

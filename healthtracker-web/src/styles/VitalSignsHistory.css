@@ -47,6 +47,27 @@
   color: #ccc;
 }
 
+/* Warning row highlighting */
+.history-table tbody tr.row-warning {
+  background: #fff8f0;
+}
+
+.history-table tbody tr.row-warning:hover {
+  background: #fff0e0;
+}
+
+/* Per-cell warning badges */
+.history-table td.cell-warning {
+  color: #c0392b;
+  font-weight: 600;
+}
+
+.history-table td.cell-warning::after {
+  content: ' ⚠';
+  font-size: 0.85em;
+  color: #e67e22;
+}
+
 @media (max-width: 768px) {
   .history-container {
     overflow-x: auto;

@@ -83,11 +83,20 @@ app.MapPost("/auth/register", async (RegisterRequest req, NpgsqlDataSource db) =
         cmd.Parameters.AddWithValue(hash);
 
         var userId = await cmd.ExecuteScalarAsync();
-        return Results.Ok(new { message = "User created successfully", userId });
+        if (userId == null)
+            return Results.BadRequest("Failed to create user");
+
+        var userIdInt = (int)userId;
+        var token = GenerateToken(userIdInt, req.Email);
+        return Results.Ok(new { message = "User created successfully", userId = userIdInt, token, email = req.Email });
     }
     catch (PostgresException ex) when (ex.SqlState == "23505") // unique constraint
     {
         return Results.BadRequest("Email already exists");
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest($"Registration failed: {ex.Message}");
     }
 });
 
@@ -114,8 +123,24 @@ app.MapPost("/auth/login", async (LoginRequest req, NpgsqlDataSource db) =>
     return Results.Ok(new { token, userId, email = req.Email });
 });
 
+app.MapGet("/auth/validate", async (NpgsqlDataSource db, HttpContext context) =>
+{
+    var userId = GetUserIdFromToken(context);
+    if (userId == null)
+        return Results.Unauthorized();
+
+    await using var cmd = db.CreateCommand("SELECT \"Id\" FROM \"Users\" WHERE \"Id\" = $1");
+    cmd.Parameters.AddWithValue(userId.Value);
+    var exists = await cmd.ExecuteScalarAsync();
+
+    if (exists == null)
+        return Results.Unauthorized();
+
+    return Results.Ok(new { valid = true });
+});
+
 // Vital Signs Endpoints
-app.MapPost("/vitals", async (VitalSignsRequest req, NpgsqlDataSource db, HttpContext context) =>
+app.MapPost("/vitals", async (VitalSignsRequest req, NpgsqlDataSource db, IConnectionMultiplexer redis, HttpContext context, ILogger<Program> logger) =>
 {
     var userId = GetUserIdFromToken(context);
     if (userId == null)
@@ -136,10 +161,50 @@ app.MapPost("/vitals", async (VitalSignsRequest req, NpgsqlDataSource db, HttpCo
     cmd.Parameters.AddWithValue(req.Notes ?? (object)DBNull.Value);
 
     var id = await cmd.ExecuteScalarAsync();
-    return Results.Ok(new { id, timestamp });
+    var recordId = (int)(id ?? 0);
+
+    var warnings = ComputeWarnings(req.HeartRate, req.TemperatureCelsius, req.OxygenSaturation);
+
+    if (warnings.Any)
+    {
+        var warningList = new List<string>();
+        if (warnings.HeartRateHigh) warningList.Add($"High Heart Rate: {req.HeartRate} BPM");
+        if (warnings.HeartRateLow) warningList.Add($"Low Heart Rate: {req.HeartRate} BPM");
+        if (warnings.TemperatureHigh) warningList.Add($"High Temperature: {req.TemperatureCelsius}°C");
+        if (warnings.TemperatureLow) warningList.Add($"Low Temperature: {req.TemperatureCelsius}°C");
+        if (warnings.OxygenLow) warningList.Add($"Low Oxygen Saturation: {req.OxygenSaturation}%");
+        logger.LogWarning("VITAL SIGN WARNING - User {UserId}: {Warnings}", userId, string.Join(", ", warningList));
+    }
+
+    var redisDb = redis.GetDatabase();
+    var redisKey = $"vitals:warnings:{userId.Value}:{recordId}";
+    await redisDb.HashSetAsync(redisKey, new StackExchange.Redis.HashEntry[]
+    {
+        new("heartRateHigh", warnings.HeartRateHigh ? "1" : "0"),
+        new("heartRateLow", warnings.HeartRateLow ? "1" : "0"),
+        new("temperatureHigh", warnings.TemperatureHigh ? "1" : "0"),
+        new("temperatureLow", warnings.TemperatureLow ? "1" : "0"),
+        new("oxygenLow", warnings.OxygenLow ? "1" : "0"),
+    });
+    await redisDb.KeyExpireAsync(redisKey, TimeSpan.FromDays(7));
+
+    return Results.Ok(new
+    {
+        id = recordId,
+        timestamp,
+        warnings = new
+        {
+            heartRateHigh = warnings.HeartRateHigh,
+            heartRateLow = warnings.HeartRateLow,
+            temperatureHigh = warnings.TemperatureHigh,
+            temperatureLow = warnings.TemperatureLow,
+            oxygenLow = warnings.OxygenLow,
+            any = warnings.Any
+        }
+    });
 });
 
-app.MapGet("/vitals", async (NpgsqlDataSource db, HttpContext context) =>
+app.MapGet("/vitals", async (NpgsqlDataSource db, IConnectionMultiplexer redis, HttpContext context) =>
 {
     var userId = GetUserIdFromToken(context);
     if (userId == null)
@@ -156,16 +221,30 @@ app.MapGet("/vitals", async (NpgsqlDataSource db, HttpContext context) =>
 
     await using var reader = await cmd.ExecuteReaderAsync();
     var vitals = new List<object>();
+    var redisDb = redis.GetDatabase();
     while (await reader.ReadAsync())
     {
+        var recordId = reader.GetInt32(0);
+        var fields = await redisDb.HashGetAllAsync($"vitals:warnings:{userId.Value}:{recordId}");
+        var wf = fields.ToDictionary(e => e.Name.ToString(), e => e.Value == "1");
+
         vitals.Add(new
         {
-            id = reader.GetInt32(0),
+            id = recordId,
             heartRate = reader.IsDBNull(1) ? (int?)null : reader.GetInt32(1),
             temperatureCelsius = reader.IsDBNull(2) ? (decimal?)null : reader.GetDecimal(2),
             oxygenSaturation = reader.IsDBNull(3) ? (int?)null : reader.GetInt32(3),
             timestamp = reader.GetFieldValue<DateTimeOffset>(4),
-            notes = reader.IsDBNull(5) ? null : reader.GetString(5)
+            notes = reader.IsDBNull(5) ? null : reader.GetString(5),
+            warnings = new
+            {
+                heartRateHigh = wf.GetValueOrDefault("heartRateHigh"),
+                heartRateLow = wf.GetValueOrDefault("heartRateLow"),
+                temperatureHigh = wf.GetValueOrDefault("temperatureHigh"),
+                temperatureLow = wf.GetValueOrDefault("temperatureLow"),
+                oxygenLow = wf.GetValueOrDefault("oxygenLow"),
+                any = wf.Values.Any(v => v)
+            }
         });
     }
 
@@ -249,6 +328,9 @@ int? GetUserIdFromToken(HttpContext context)
     }
 }
 
+VitalWarnings ComputeWarnings(int? heartRate, decimal? temp, int? spo2) =>
+    new(heartRate is > 100, heartRate is < 60, temp is > 38m, temp is < 36m, spo2 is < 95);
+
 // Request/Response records
 record RegisterRequest(string Email, string Password);
 record LoginRequest(string Email, string Password);
@@ -259,3 +341,8 @@ record VitalSignsRequest(
     [property: JsonPropertyName("oxygenSaturation")] int? OxygenSaturation,
     [property: JsonPropertyName("notes")] string? Notes
 );
+
+record VitalWarnings(bool HeartRateHigh, bool HeartRateLow, bool TemperatureHigh, bool TemperatureLow, bool OxygenLow)
+{
+    public bool Any => HeartRateHigh || HeartRateLow || TemperatureHigh || TemperatureLow || OxygenLow;
+}

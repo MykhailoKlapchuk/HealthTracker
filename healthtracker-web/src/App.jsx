@@ -9,14 +9,36 @@ function App() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Check if user is already logged in
-    const token = localStorage.getItem('token');
-    const userEmail = localStorage.getItem('userEmail');
-    if (token && userEmail) {
-      setUser({ email: userEmail });
-      setIsLoggedIn(true);
-    }
-    setLoading(false);
+    // Check if user is already logged in by validating the token
+    const validateToken = async () => {
+      const token = localStorage.getItem('token');
+      const userEmail = localStorage.getItem('userEmail');
+
+      if (token && userEmail) {
+        try {
+          // Validate token by checking if user exists
+          const response = await fetch('https://localhost:7020/auth/validate', {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+
+          if (response.ok) {
+            setUser({ email: userEmail });
+            setIsLoggedIn(true);
+          } else {
+            // Token is invalid or user doesn't exist, clear it
+            localStorage.removeItem('token');
+            localStorage.removeItem('userEmail');
+          }
+        } catch (err) {
+          // Can't reach API, clear token to be safe
+          localStorage.removeItem('token');
+          localStorage.removeItem('userEmail');
+        }
+      }
+      setLoading(false);
+    };
+
+    validateToken();
   }, []);
 
   const handleLogin = (email, token) => {

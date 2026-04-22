@@ -18,7 +18,8 @@
       "Bash(npm init:*)",
       "Bash(npm install:*)",
       "Bash(ls -la *.md)",
-      "Read(//tmp/**)"
+      "Read(//tmp/**)",
+      "Bash(git checkout *)"
     ]
   }
 }

@@ -12,7 +12,7 @@ function Dashboard({ user, onLogout }) {
     setLoading(true);
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch('http://localhost:5000/vitals', {
+      const response = await fetch('https://localhost:7020/vitals', {
         headers: {
           'Authorization': `Bearer ${token}`,
         },
@@ -64,24 +64,43 @@ function Dashboard({ user, onLogout }) {
           {latest ? (
             <div className="cards-grid">
               {latest.heartRate !== null && (
-                <div className="vital-card heart-rate">
+                <div className={`vital-card heart-rate${
+                  latest.warnings?.heartRateHigh || latest.warnings?.heartRateLow ? ' warning' : ''
+                }`}>
                   <div className="vital-icon">❤️</div>
                   <div className="vital-value">{latest.heartRate}</div>
                   <div className="vital-label">BPM</div>
+                  {latest.warnings?.heartRateHigh && (
+                    <div className="vital-warning-label">High BPM</div>
+                  )}
+                  {latest.warnings?.heartRateLow && (
+                    <div className="vital-warning-label">Low BPM</div>
+                  )}
                 </div>
               )}
               {latest.temperatureCelsius !== null && (
-                <div className="vital-card temperature">
+                <div className={`vital-card temperature${
+                  latest.warnings?.temperatureHigh || latest.warnings?.temperatureLow ? ' warning' : ''
+                }`}>
                   <div className="vital-icon">🌡️</div>
                   <div className="vital-value">{latest.temperatureCelsius}</div>
                   <div className="vital-label">°C</div>
+                  {latest.warnings?.temperatureHigh && (
+                    <div className="vital-warning-label">High Temp</div>
+                  )}
+                  {latest.warnings?.temperatureLow && (
+                    <div className="vital-warning-label">Low Temp</div>
+                  )}
                 </div>
               )}
               {latest.oxygenSaturation !== null && (
-                <div className="vital-card oxygen">
+                <div className={`vital-card oxygen${latest.warnings?.oxygenLow ? ' warning' : ''}`}>
                   <div className="vital-icon">💨</div>
                   <div className="vital-value">{latest.oxygenSaturation}</div>
                   <div className="vital-label">SpO₂ %</div>
+                  {latest.warnings?.oxygenLow && (
+                    <div className="vital-warning-label">Low SpO₂</div>
+                  )}
                 </div>
               )}
               {!latest.heartRate && !latest.temperatureCelsius && !latest.oxygenSaturation && (

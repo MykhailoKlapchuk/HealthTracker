@@ -48,7 +48,7 @@ function VitalSignsForm({ onVitalAdded, onCancel }) {
         notes: formData.notes || null,
       };
 
-      const response = await fetch('http://localhost:5000/vitals', {
+      const response = await fetch('https://localhost:7020/vitals', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

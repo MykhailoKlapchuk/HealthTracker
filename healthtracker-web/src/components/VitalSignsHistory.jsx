@@ -19,15 +19,33 @@ function VitalSignsHistory({ vitals }) {
         </thead>
         <tbody>
           {vitals.map((vital) => (
-            <tr key={vital.id}>
+            <tr key={vital.id} className={vital.warnings?.any ? 'row-warning' : ''}>
               <td className="timestamp">{formatDate(vital.timestamp)}</td>
-              <td className={vital.heartRate ? '' : 'empty'}>
+              <td className={
+                !vital.heartRate
+                  ? 'empty'
+                  : (vital.warnings?.heartRateHigh || vital.warnings?.heartRateLow)
+                    ? 'cell-warning'
+                    : ''
+              }>
                 {vital.heartRate ? vital.heartRate : '—'}
               </td>
-              <td className={vital.temperatureCelsius ? '' : 'empty'}>
+              <td className={
+                !vital.temperatureCelsius
+                  ? 'empty'
+                  : (vital.warnings?.temperatureHigh || vital.warnings?.temperatureLow)
+                    ? 'cell-warning'
+                    : ''
+              }>
                 {vital.temperatureCelsius ? vital.temperatureCelsius : '—'}
               </td>
-              <td className={vital.oxygenSaturation ? '' : 'empty'}>
+              <td className={
+                !vital.oxygenSaturation
+                  ? 'empty'
+                  : vital.warnings?.oxygenLow
+                    ? 'cell-warning'
+                    : ''
+              }>
                 {vital.oxygenSaturation ? vital.oxygenSaturation : '—'}
               </td>
               <td className="notes">{vital.notes || '—'}</td>
