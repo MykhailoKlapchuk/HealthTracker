@@ -1,0 +1,67 @@
+.history-container {
+  overflow-x: auto;
+}
+
+.history-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+
+.history-table thead {
+  background: #f9f9f9;
+}
+
+.history-table th {
+  padding: 15px;
+  text-align: left;
+  font-weight: 600;
+  color: #333;
+  border-bottom: 2px solid #ddd;
+}
+
+.history-table td {
+  padding: 15px;
+  border-bottom: 1px solid #eee;
+  color: #666;
+}
+
+.history-table tbody tr:hover {
+  background: #fafafa;
+}
+
+.history-table .timestamp {
+  font-weight: 500;
+  color: #333;
+  font-size: 0.9rem;
+}
+
+.history-table .notes {
+  max-width: 300px;
+  word-break: break-word;
+  color: #888;
+  font-style: italic;
+}
+
+.history-table .empty {
+  color: #ccc;
+}
+
+@media (max-width: 768px) {
+  .history-container {
+    overflow-x: auto;
+  }
+
+  .history-table {
+    font-size: 0.85rem;
+  }
+
+  .history-table th,
+  .history-table td {
+    padding: 10px;
+  }
+
+  .history-table .notes {
+    max-width: 150px;
+  }
+}

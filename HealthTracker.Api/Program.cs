@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json.Serialization;
 using Npgsql;
 using Scalar.AspNetCore;
 using StackExchange.Redis;
@@ -5,8 +8,16 @@ using StackExchange.Redis;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.AddServiceDefaults();
-
 builder.Services.AddOpenApi();
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowAll", policy =>
+    {
+        policy.AllowAnyOrigin()
+              .AllowAnyMethod()
+              .AllowAnyHeader();
+    });
+});
 
 builder.AddRedisClient("redis");
 builder.AddNpgsqlDataSource("healthdb");
@@ -14,7 +25,26 @@ builder.AddNpgsqlDataSource("healthdb");
 var app = builder.Build();
 
 var dbSource = app.Services.GetRequiredService<NpgsqlDataSource>();
+
+// Initialize database tables
 await using (var cmd = dbSource.CreateCommand("""
+    CREATE TABLE IF NOT EXISTS "Users" (
+        "Id"           SERIAL PRIMARY KEY,
+        "Email"        VARCHAR(255) UNIQUE NOT NULL,
+        "PasswordHash" VARCHAR(255) NOT NULL,
+        "CreatedAt"    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS "VitalSigns" (
+        "Id"               SERIAL PRIMARY KEY,
+        "UserId"           INTEGER NOT NULL REFERENCES "Users"("Id") ON DELETE CASCADE,
+        "HeartRate"        INTEGER,
+        "TemperatureCelsius" DECIMAL(5,2),
+        "OxygenSaturation" INTEGER,
+        "Timestamp"        TIMESTAMPTZ NOT NULL,
+        "Notes"            TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS "HeartRateHistory" (
         "Id"        SERIAL PRIMARY KEY,
         "Bpm"       INTEGER NOT NULL,
@@ -28,16 +58,121 @@ await using (var cmd = dbSource.CreateCommand("""
 
 app.MapDefaultEndpoints();
 
-// Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
     app.MapScalarApiReference();
 }
 
+app.UseCors("AllowAll");
 app.UseHttpsRedirection();
 
+// Auth Endpoints
+app.MapPost("/auth/register", async (RegisterRequest req, NpgsqlDataSource db) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Email) || string.IsNullOrWhiteSpace(req.Password))
+        return Results.BadRequest("Email and password required");
 
+    var hash = HashPassword(req.Password);
+
+    try
+    {
+        await using var cmd = db.CreateCommand(
+            "INSERT INTO \"Users\" (\"Email\", \"PasswordHash\") VALUES ($1, $2) RETURNING \"Id\"");
+        cmd.Parameters.AddWithValue(req.Email.ToLower());
+        cmd.Parameters.AddWithValue(hash);
+
+        var userId = await cmd.ExecuteScalarAsync();
+        return Results.Ok(new { message = "User created successfully", userId });
+    }
+    catch (PostgresException ex) when (ex.SqlState == "23505") // unique constraint
+    {
+        return Results.BadRequest("Email already exists");
+    }
+});
+
+app.MapPost("/auth/login", async (LoginRequest req, NpgsqlDataSource db) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Email) || string.IsNullOrWhiteSpace(req.Password))
+        return Results.BadRequest("Email and password required");
+
+    await using var cmd = db.CreateCommand(
+        "SELECT \"Id\", \"PasswordHash\" FROM \"Users\" WHERE \"Email\" = $1");
+    cmd.Parameters.AddWithValue(req.Email.ToLower());
+
+    await using var reader = await cmd.ExecuteReaderAsync();
+    if (!await reader.ReadAsync())
+        return Results.Unauthorized();
+
+    var userId = reader.GetInt32(0);
+    var hash = reader.GetString(1);
+
+    if (!VerifyPassword(req.Password, hash))
+        return Results.Unauthorized();
+
+    var token = GenerateToken(userId, req.Email);
+    return Results.Ok(new { token, userId, email = req.Email });
+});
+
+// Vital Signs Endpoints
+app.MapPost("/vitals", async (VitalSignsRequest req, NpgsqlDataSource db, HttpContext context) =>
+{
+    var userId = GetUserIdFromToken(context);
+    if (userId == null)
+        return Results.Unauthorized();
+
+    var timestamp = DateTimeOffset.UtcNow;
+
+    await using var cmd = db.CreateCommand("""
+        INSERT INTO "VitalSigns" ("UserId", "HeartRate", "TemperatureCelsius", "OxygenSaturation", "Timestamp", "Notes")
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING "Id"
+        """);
+    cmd.Parameters.AddWithValue(userId.Value);
+    cmd.Parameters.AddWithValue(req.HeartRate ?? (object)DBNull.Value);
+    cmd.Parameters.AddWithValue(req.TemperatureCelsius ?? (object)DBNull.Value);
+    cmd.Parameters.AddWithValue(req.OxygenSaturation ?? (object)DBNull.Value);
+    cmd.Parameters.AddWithValue(timestamp);
+    cmd.Parameters.AddWithValue(req.Notes ?? (object)DBNull.Value);
+
+    var id = await cmd.ExecuteScalarAsync();
+    return Results.Ok(new { id, timestamp });
+});
+
+app.MapGet("/vitals", async (NpgsqlDataSource db, HttpContext context) =>
+{
+    var userId = GetUserIdFromToken(context);
+    if (userId == null)
+        return Results.Unauthorized();
+
+    await using var cmd = db.CreateCommand("""
+        SELECT "Id", "HeartRate", "TemperatureCelsius", "OxygenSaturation", "Timestamp", "Notes"
+        FROM "VitalSigns"
+        WHERE "UserId" = $1
+        ORDER BY "Timestamp" DESC
+        LIMIT 50
+        """);
+    cmd.Parameters.AddWithValue(userId.Value);
+
+    await using var reader = await cmd.ExecuteReaderAsync();
+    var vitals = new List<object>();
+    while (await reader.ReadAsync())
+    {
+        vitals.Add(new
+        {
+            id = reader.GetInt32(0),
+            heartRate = reader.IsDBNull(1) ? (int?)null : reader.GetInt32(1),
+            temperatureCelsius = reader.IsDBNull(2) ? (decimal?)null : reader.GetDecimal(2),
+            oxygenSaturation = reader.IsDBNull(3) ? (int?)null : reader.GetInt32(3),
+            timestamp = reader.GetFieldValue<DateTimeOffset>(4),
+            notes = reader.IsDBNull(5) ? null : reader.GetString(5)
+        });
+    }
+
+    return Results.Ok(vitals);
+});
+
+// Legacy heartrate endpoint (for backward compatibility)
 app.MapPost("/heartrate", async (HeartRateRequest request, IConnectionMultiplexer redis, NpgsqlDataSource db) =>
 {
     var timestamp = DateTimeOffset.UtcNow;
@@ -74,4 +209,53 @@ app.MapGet("/heartrate", async (IConnectionMultiplexer redis) =>
 
 app.Run();
 
+// Helper functions
+string HashPassword(string password)
+{
+    using var sha256 = SHA256.Create();
+    var hash = sha256.ComputeHash(Encoding.UTF8.GetBytes(password));
+    return Convert.ToBase64String(hash);
+}
+
+bool VerifyPassword(string password, string hash)
+{
+    var hashOfInput = HashPassword(password);
+    return hashOfInput.Equals(hash);
+}
+
+string GenerateToken(int userId, string email)
+{
+    var payload = $"{userId}:{email}:{DateTimeOffset.UtcNow.AddDays(7):O}";
+    var token = Convert.ToBase64String(Encoding.UTF8.GetBytes(payload));
+    return token;
+}
+
+int? GetUserIdFromToken(HttpContext context)
+{
+    var authHeader = context.Request.Headers["Authorization"].FirstOrDefault();
+    if (string.IsNullOrWhiteSpace(authHeader) || !authHeader.StartsWith("Bearer "))
+        return null;
+
+    try
+    {
+        var token = authHeader.Substring("Bearer ".Length);
+        var payload = Encoding.UTF8.GetString(Convert.FromBase64String(token));
+        var parts = payload.Split(':');
+        return int.Parse(parts[0]);
+    }
+    catch
+    {
+        return null;
+    }
+}
+
+// Request/Response records
+record RegisterRequest(string Email, string Password);
+record LoginRequest(string Email, string Password);
 record HeartRateRequest(int Bpm);
+record VitalSignsRequest(
+    [property: JsonPropertyName("heartRate")] int? HeartRate,
+    [property: JsonPropertyName("temperatureCelsius")] decimal? TemperatureCelsius,
+    [property: JsonPropertyName("oxygenSaturation")] int? OxygenSaturation,
+    [property: JsonPropertyName("notes")] string? Notes
+);
