@@ -1,8 +1,6 @@
 import { useState } from 'react';
-import axios from 'axios';
+import api from '../api/api';
 import '../styles/Login.css';
-
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://localhost:7020';
 
 function Login({ onLogin }) {
   const [isLogin, setIsLogin] = useState(true);
@@ -25,13 +23,13 @@ function Login({ onLogin }) {
       }
 
       const endpoint = isLogin ? '/auth/login' : '/auth/register';
-      const response = await axios.post(`${API_BASE_URL}${endpoint}`, {
+      const response = await api.post(endpoint, {
         email,
         password,
       });
 
-      if (response.data.token) {
-        onLogin(email, response.data.token);
+      if (response.data.email) {
+        onLogin(response.data.email);
       } else {
         setError('Login failed');
       }

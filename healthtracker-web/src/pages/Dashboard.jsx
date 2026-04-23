@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import api from '../api/api';
 import VitalSignsForm from '../components/VitalSignsForm';
 import VitalSignsHistory from '../components/VitalSignsHistory';
 import '../styles/Dashboard.css';
@@ -6,24 +7,18 @@ import '../styles/Dashboard.css';
 function Dashboard({ user, onLogout }) {
   const [vitals, setVitals] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
   const [showForm, setShowForm] = useState(false);
 
   const fetchVitals = async () => {
     setLoading(true);
+    setError('');
     try {
-      const token = localStorage.getItem('token');
-      const response = await fetch('https://localhost:7020/vitals', {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setVitals(data);
-      }
+      const response = await api.get('/vitals');
+      setVitals(response.data);
     } catch (err) {
-      console.error('Error fetching vitals:', err);
+      const errorMsg = err.response?.data?.message || err.message || 'Failed to load vital signs';
+      setError(errorMsg);
     } finally {
       setLoading(false);
     }
@@ -59,6 +54,7 @@ function Dashboard({ user, onLogout }) {
       </header>
 
       <main className="dashboard-content">
+        {error && <div className="error-message">{error}</div>}
         <section className="vital-cards">
           <h2>Latest Vital Signs</h2>
           {latest ? (

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import api from './api/api';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import './styles/App.css';
@@ -9,50 +10,40 @@ function App() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Check if user is already logged in by validating the token
     const validateToken = async () => {
-      const token = localStorage.getItem('token');
-      const userEmail = localStorage.getItem('userEmail');
-
-      if (token && userEmail) {
-        try {
-          // Validate token by checking if user exists
-          const response = await fetch('https://localhost:7020/auth/validate', {
-            headers: { 'Authorization': `Bearer ${token}` }
-          });
-
-          if (response.ok) {
-            setUser({ email: userEmail });
-            setIsLoggedIn(true);
-          } else {
-            // Token is invalid or user doesn't exist, clear it
-            localStorage.removeItem('token');
-            localStorage.removeItem('userEmail');
-          }
-        } catch (err) {
-          // Can't reach API, clear token to be safe
-          localStorage.removeItem('token');
-          localStorage.removeItem('userEmail');
+      try {
+        const response = await api.get('/auth/validate');
+        if (response.data.valid && response.data.email) {
+          setUser({ email: response.data.email });
+          setIsLoggedIn(true);
         }
+      } catch (err) {
+        // Not authenticated (401), network error, or other issue — stay logged out
+        if (err.response?.status !== 401) {
+          console.warn('Session validation error:', err.message);
+        }
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     };
 
     validateToken();
   }, []);
 
-  const handleLogin = (email, token) => {
-    localStorage.setItem('token', token);
-    localStorage.setItem('userEmail', email);
+  const handleLogin = (email) => {
     setUser({ email });
     setIsLoggedIn(true);
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('userEmail');
-    setUser(null);
-    setIsLoggedIn(false);
+  const handleLogout = async () => {
+    try {
+      await api.post('/auth/logout');
+    } catch (err) {
+      console.error('Logout error:', err);
+    } finally {
+      setUser(null);
+      setIsLoggedIn(false);
+    }
   };
 
   if (loading) {

@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "Bash(cd /d \"C:\\\\Users\\\\mklap\\\\source\\\\repos\\\\AspireTest\\\\healthtracker-web\")",
+      "Bash(npm install *)",
+      "Bash(dotnet run *)"
+    ]
+  }
+}

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import api from '../api/api';
 import '../styles/VitalSignsForm.css';
 
 function VitalSignsForm({ onVitalAdded, onCancel }) {
@@ -25,7 +26,6 @@ function VitalSignsForm({ onVitalAdded, onCancel }) {
     setLoading(true);
 
     try {
-      // Validate at least one vital sign is provided
       if (
         !formData.heartRate &&
         !formData.temperatureCelsius &&
@@ -36,7 +36,6 @@ function VitalSignsForm({ onVitalAdded, onCancel }) {
         return;
       }
 
-      const token = localStorage.getItem('token');
       const payload = {
         heartRate: formData.heartRate ? parseInt(formData.heartRate) : null,
         temperatureCelsius: formData.temperatureCelsius
@@ -48,16 +47,9 @@ function VitalSignsForm({ onVitalAdded, onCancel }) {
         notes: formData.notes || null,
       };
 
-      const response = await fetch('https://localhost:7020/vitals', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
-        body: JSON.stringify(payload),
-      });
+      const response = await api.post('/vitals', payload);
 
-      if (response.ok) {
+      if (response.status === 200) {
         setFormData({
           heartRate: '',
           temperatureCelsius: '',
@@ -69,7 +61,8 @@ function VitalSignsForm({ onVitalAdded, onCancel }) {
         setError('Failed to save vital signs');
       }
     } catch (err) {
-      setError(err.message || 'An error occurred');
+      const errorMsg = err.response?.data?.message || err.message || 'Failed to save vital signs';
+      setError(errorMsg);
     } finally {
       setLoading(false);
     }

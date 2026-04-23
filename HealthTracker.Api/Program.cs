@@ -11,11 +11,12 @@ builder.AddServiceDefaults();
 builder.Services.AddOpenApi();
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowAll", policy =>
+    options.AddPolicy("AllowFrontend", policy =>
     {
-        policy.AllowAnyOrigin()
+        policy.WithOrigins("http://localhost:3000")
               .AllowAnyMethod()
-              .AllowAnyHeader();
+              .AllowAnyHeader()
+              .AllowCredentials();
     });
 });
 
@@ -64,11 +65,11 @@ if (app.Environment.IsDevelopment())
     app.MapScalarApiReference();
 }
 
-app.UseCors("AllowAll");
+app.UseCors("AllowFrontend");
 app.UseHttpsRedirection();
 
 // Auth Endpoints
-app.MapPost("/auth/register", async (RegisterRequest req, NpgsqlDataSource db) =>
+app.MapPost("/auth/register", async (RegisterRequest req, NpgsqlDataSource db, HttpContext context) =>
 {
     if (string.IsNullOrWhiteSpace(req.Email) || string.IsNullOrWhiteSpace(req.Password))
         return Results.BadRequest("Email and password required");
@@ -88,7 +89,8 @@ app.MapPost("/auth/register", async (RegisterRequest req, NpgsqlDataSource db) =
 
         var userIdInt = (int)userId;
         var token = GenerateToken(userIdInt, req.Email);
-        return Results.Ok(new { message = "User created successfully", userId = userIdInt, token, email = req.Email });
+        SetAuthCookie(context, token);
+        return Results.Ok(new { message = "User created successfully", userId = userIdInt, email = req.Email });
     }
     catch (PostgresException ex) when (ex.SqlState == "23505") // unique constraint
     {
@@ -100,7 +102,7 @@ app.MapPost("/auth/register", async (RegisterRequest req, NpgsqlDataSource db) =
     }
 });
 
-app.MapPost("/auth/login", async (LoginRequest req, NpgsqlDataSource db) =>
+app.MapPost("/auth/login", async (LoginRequest req, NpgsqlDataSource db, HttpContext context) =>
 {
     if (string.IsNullOrWhiteSpace(req.Email) || string.IsNullOrWhiteSpace(req.Password))
         return Results.BadRequest("Email and password required");
@@ -120,7 +122,8 @@ app.MapPost("/auth/login", async (LoginRequest req, NpgsqlDataSource db) =>
         return Results.Unauthorized();
 
     var token = GenerateToken(userId, req.Email);
-    return Results.Ok(new { token, userId, email = req.Email });
+    SetAuthCookie(context, token);
+    return Results.Ok(new { userId, email = req.Email });
 });
 
 app.MapGet("/auth/validate", async (NpgsqlDataSource db, HttpContext context) =>
@@ -129,14 +132,21 @@ app.MapGet("/auth/validate", async (NpgsqlDataSource db, HttpContext context) =>
     if (userId == null)
         return Results.Unauthorized();
 
-    await using var cmd = db.CreateCommand("SELECT \"Id\" FROM \"Users\" WHERE \"Id\" = $1");
+    await using var cmd = db.CreateCommand("SELECT \"Email\" FROM \"Users\" WHERE \"Id\" = $1");
     cmd.Parameters.AddWithValue(userId.Value);
-    var exists = await cmd.ExecuteScalarAsync();
 
-    if (exists == null)
+    await using var reader = await cmd.ExecuteReaderAsync();
+    if (!await reader.ReadAsync())
         return Results.Unauthorized();
 
-    return Results.Ok(new { valid = true });
+    var email = reader.GetString(0);
+    return Results.Ok(new { valid = true, email });
+});
+
+app.MapPost("/auth/logout", (HttpContext context) =>
+{
+    context.Response.Cookies.Delete("auth_token");
+    return Results.Ok(new { message = "Logged out" });
 });
 
 // Vital Signs Endpoints
@@ -309,15 +319,37 @@ string GenerateToken(int userId, string email)
     return token;
 }
 
+void SetAuthCookie(HttpContext ctx, string token) =>
+    ctx.Response.Cookies.Append("auth_token", token, new CookieOptions
+    {
+        HttpOnly = true,
+        Secure = !app.Environment.IsDevelopment(),
+        SameSite = SameSiteMode.Lax,
+        Expires = DateTimeOffset.UtcNow.AddDays(7),
+        Path = "/"
+    });
+
 int? GetUserIdFromToken(HttpContext context)
 {
-    var authHeader = context.Request.Headers["Authorization"].FirstOrDefault();
-    if (string.IsNullOrWhiteSpace(authHeader) || !authHeader.StartsWith("Bearer "))
-        return null;
+    string? token = null;
+
+    // Try cookie first
+    if (context.Request.Cookies.TryGetValue("auth_token", out var cookieToken))
+    {
+        token = cookieToken;
+    }
+    else
+    {
+        // Fall back to Authorization header
+        var authHeader = context.Request.Headers["Authorization"].FirstOrDefault();
+        if (!string.IsNullOrWhiteSpace(authHeader) && authHeader.StartsWith("Bearer "))
+            token = authHeader["Bearer ".Length..];
+    }
+
+    if (string.IsNullOrEmpty(token)) return null;
 
     try
     {
-        var token = authHeader.Substring("Bearer ".Length);
         var payload = Encoding.UTF8.GetString(Convert.FromBase64String(token));
         var parts = payload.Split(':');
         return int.Parse(parts[0]);
